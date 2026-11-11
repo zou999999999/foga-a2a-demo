@@ -1,0 +1,15 @@
+{
+  "name": "foga-a2a-demo",
+  "version": "1.0.0",
+  "description": "Finch A2A Dual-Agent Protocol & Identity Invariance Demo",
+  "main": "agent_bob_server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node agent_bob_server.js",
+    "alice": "node agent_alice_client.js",
+    "demo": "node agent_alice_client.js demo-identity"
+  },
+  "dependencies": {
+    "ethers": "^6.13.5"
+  }
+}
