@@ -144,8 +144,9 @@ Authorization: FOGA-EIP712 <base64url(JSON envelope)>
 如需在终端（PowerShell 或 CMD）中进行原生指令操作，请遵循以下流程：
 
 ### 1. 终端环境导航
-```powershell
-cd d:\ZouJiancheng\Finch\foga-a2a-demo
+```bash
+# 进入工程根目录并安装依赖
+npm install
 ```
 
 ### 2. 核心指令速查
