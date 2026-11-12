@@ -138,109 +138,114 @@ Authorization: FOGA-EIP712 <base64url(JSON envelope)>
 
 ---
 
-## 六、 快速启动与终端指令手册
+## 六、 对称 P2P 架构、L3 三关裁决引擎与快速启动手册
 
-本工程根目录下已内置 Windows 一键运行器：[`运行_FOGA_A2A双Agent演示.bat`](./运行_FOGA_A2A双Agent演示.bat)。  
-如需在终端（PowerShell 或 CMD）中进行原生指令操作，请遵循以下流程：
+本工程支持 **对称 P2P 双节点对等运行（Symmetric Peer Mode）**：同一份 [`agent_bob_server.js`](./agent_bob_server.js) 既是 A2A 1.0 服务端（暴露名片与承接任务），又是自带钱包签名的 P2P 客户端（可通过网页控制台或 `/peer/send` 主动外呼任何远程对等节点）。
 
-### 1. 终端环境导航
+### 1. FOGA L3 确定性问题处理流水线（无需外部 LLM API）
+严格遵循 [`Finch OG Agent`](https://github.com/garyyang-finchip/foga) 的 `L3 Kernel` + `Catalog.invoke` 规范，每次处理 P2P 任务均执行 **五步闭环与三道硬门禁**：
+1. **Perceive（态势感知）**：读取本地节点安全锚点、持有技能包、24h 预算账本与调用方入参；
+2. **Propose（方案提议 — L4 认知适配器）**：默认采用确定性规则表（`stub` / `heuristic-rule-engine`）生成方案与摘要哈希（`promptHash` / `responseHash`），**仅具提议权，无决定权与出资权**；
+3. **Decide（三道门禁硬性裁决 — `Catalog.invoke`）**：
+   - **第一关 · 调用权限门（`permission` / `input`）**：校验 `FOGA-EIP712` 签名有效性与 JSON Schema；
+   - **第二关 · 业务与策略门（`safety` / `skill` / `policy` / `budget`）**：依次核验 Guardian 熔断开关（`safety`）、技能持有与包哈希（`skill`）、最低报价底线（`policy`）、单笔及日度预算上限（`budget`）；
+   - **第三关 · 账户白名单门（`wallet`）**：校验操作是否在 `FogaCellAccount` 允许的 `operatorAllowList` 内；
+4. **Execute（三步幂等作业）**：依次执行 `tender_precheck` -> `skill_run` -> `tender_submit`；
+5. **Record（不可篡改决策存证 `Decision Record`）**：无论放行（`allowed`）或拦截（`refused`），均生成带门禁原因 `gate` 与模型哈希的审计凭证。
+
+### 2. P2P 双方 Agent 交换的 5 类核心协议信息
+- **① 能力名片发现（`GET /.well-known/agent-card.json`）**：交换 `cellAddress`、ERC-8004 `agentId`、支持的技能列表与 `FOGA-EIP712` 鉴权域；
+- **② 密码学请求信封（HTTP Headers）**：携带 `A2A-Version: 1.0`（缺失则报 `-32009`）与 `Authorization: FOGA-EIP712 <base64url>`（绑定 Method、Path、Body Keccak256 哈希、时间戳与防重放 Nonce）；
+- **③ 双轨制业务报文（`Quote` 询价轨 vs `Tender` 履约轨）**：先通过公开 `quote` 确认条款与技能支持度，再通过带签名的 `tender` 触发三步执行；若缺少 `tokenId` 等关键参数，自动返回 `TASK_STATE_INPUT_REQUIRED` 支持多轮补参续接；
+- **④ 可验证交付物与决策凭证（`submission` Artifact）**：返回 `resultHash`、`answerHash`、`jobId`、`decisionId` 与承载的链上法定身份地址；
+- **⑤ 生命周期与隐私隔离控制（`GetTask` / `ListTasks` / `CancelTask`）**：任务严格按调用方签名地址隔离（第三方越权查询返回 `-32006 TaskNotFoundError`），支持未提交前取消任务（`TASK_STATE_CANCELED`）。
+
+### 3. 核心终端指令速查
+
 ```bash
 # 进入工程根目录并安装依赖
 npm install
 ```
 
-### 2. 核心指令速查
-
 | 序号 | 业务功能模块 | 终端执行指令 | 预期输出与现象 |
 |---|---|---|---|
-| **01** | **启动 Bob 服务端** | `node agent_bob_server.js` | 开启本地 3001 端口与 Web/手机 可视化控制台。 |
-| **02** | **开启公网 HTTPS 隧道** | `npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1` | 输出 `https://xxxx.loca.lt`，供异地导师电脑或手机 5G 连入。 |
-| **03** | **全自动身份确权推演** | `node agent_alice_client.js demo-identity` | Alice 发起连续调用，验证大模型切换前后地址的不变性。 |
-| **04** | **单步拉取能力名片** | `node agent_alice_client.js card` | 返回标准 `/.well-known/agent-card.json` 规范定义。 |
-| **05** | **单步带签名安全询价** | `node agent_alice_client.js quote` | Alice 附带 EIP-712 签名，获取 Bob 的报价与履约资金要求。 |
-| **06** | **单步派发自定义任务** | `node agent_alice_client.js task "<提示词>"` | 派发指定任务，获取包含决策 ID 与交付物的执行凭证。 |
-| **07** | **运行 23 项全自动化测试** | `node test_suite.js` | 100% 自动化测试防篡改、防重放、未授权拦截与地址同一性。 |
+| **01** | **启动节点 A (AID 8888, 端口 3001)** | `node agent_bob_server.js` | 开启 Peer A 服务端与 P2P 双向控制台 (`http://localhost:3001`)。 |
+| **02** | **启动节点 B (AID 9999, 端口 3002)** | `node agent_bob_server.js --peer-b` | 开启对称 Peer B 节点 (`http://localhost:3002`)，可与 3001 双向互调。 |
+| **03** | **一键启动本机双节点 P2P 演练** | `.\启动_双节点P2P对等演练.bat` | 同时拉起 3001(8888) 与 3002(9999) 双节点及两个可视化控制台。 |
+| **04** | **开启公网 HTTPS 隧道** | `npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1` | 输出 `https://xxxx.loca.lt`，供异地导师节点或手机 5G 跨网互连。 |
+| **05** | **全自动身份确权推演** | `node agent_alice_client.js demo-identity` | 连续切换 3 种认知引擎与升级技能，验证链上地址 100% 恒定。 |
+| **06** | **全自动 P2P 五阶段与门禁演练** | `node agent_alice_client.js demo-p2p` | 自动演示询价、`INPUT_REQUIRED` 多轮续接、三道门禁拒单与 `CancelTask`。 |
+| **07** | **运行 43 项全自动化测试套件** | `node test_suite.js` | 自启动双节点，100% 自动化验证 14 大类 43 项安全、门禁与双向 P2P 指标。 |
 
-### 3. 进阶：指定跨公网隧道调用
-若需让 Alice 跨越外部公网进行真实端到端穿透测试，可在终端注入环境变量：
-```powershell
-$env:BOB_URL="https://your-tunnel-domain.loca.lt"; node agent_alice_client.js demo-identity
-```
+### 4. 与导师跨城市/跨路由器真实 P2P 对联方法
+1. **学生电脑**：运行 `node agent_bob_server.js`（默认 AID `8888`，端口 `3001`），并开启隧道拿到 `https://student-node.loca.lt`；
+2. **导师电脑**：克隆本仓库，运行 `node agent_bob_server.js --peer-b`（AID `9999`，端口 `3002`），并开启隧道 `--port 3002` 拿到 `https://mentor-node.loca.lt`；
+3. **双向对等交互**：双方在各自浏览器控制台的 **「🌐 P2P 对等节点双向连接器」** 输入框中填入对方的 `https://xxx.loca.lt` 地址，即可直接用各自节点的私钥互相拉取名片、发起签名任务、测试多轮追问与 L3 门禁拦截！
 
 ---
 
-## 七、 23 项自动化安全与边界测试套件
+## 七、 43 项自动化安全、L3 门禁与对称 P2P 测试套件
 
-运行 `node test_suite.js` 覆盖的完整测试矩阵：
+运行 `node test_suite.js` 覆盖的 14 大类 43 项完整测试矩阵：
 
 * `1.1 ~ 1.3` **服务健康与物理身份**：校验账户地址合法性与 ERC-8004 AID；
 * `2.1 ~ 2.5` **A2A 1.0 协议规范一致性**：校验 AgentCard、协议绑定与 EIP-712 声明；
-* `3.1 ~ 3.2` **零信任准入拦截**：未签名任务必须 100% 被 403 严格阻断；
+* `3.1 ~ 3.2` **零信任准入拦截**：未签名任务必须 100% 被 403 (`-32001`) 严格阻断；
 * `4.1` **加密防篡改保障**：报文被中间人修改 1 字节即触发 401 BodyHash 不匹配拦截；
 * `5.1 ~ 5.2` **反重放攻击防御**：捕获相同 Nonce 的重复重放指令坚决阻断；
 * `6.1 ~ 6.2` **资产化询价履约**：验证 Quote 资产与哈希锁（Hashlock）条款交付；
 * `7.1 ~ 7.5` **“忒修斯之船”身份同一性**：连续切换大模型与挂载技能，物理地址绝对不变；
-* `8.1 ~ 8.3` **Web/Mobile 可视化控制台**：多端响应式监控面板渲染就绪。
+* `8.1 ~ 8.3` **Web/Mobile 可视化控制台**：多端响应式监控面板与 P2P 连接器渲染就绪；
+* `9.1 ~ 9.2` **版本强校验与方法边界**：缺失 `A2A-Version: 1.0` 报 `-32009`，流式方法报 `-32004`；
+* `10.1 ~ 10.2` **`(caller, messageId)` 幂等防重**：相同消息 ID 重复投递直接返回原 Task，绝不重复执行；
+* `11.1 ~ 11.3` **多轮缺参追问与任务续接**：验证 `TASK_STATE_INPUT_REQUIRED` -> 携带 `taskId` 补参 -> `TASK_STATE_COMPLETED` 闭环；
+* `12.1 ~ 12.6` **L3 内核三道门禁与决策存证**：实测 `skill`、`policy`、`budget`、`safety` 四类门禁精准拒单及 `Decision Record` 生成；
+* `13.1 ~ 13.4` **调用方隐私隔离与生命周期**：验证第三方 Eve 越权调用 `GetTask` 被 `-32006` 拦截，以及 `CancelTask` 状态机流转；
+* `14.1 ~ 14.3` **双节点对称 P2P 双向互调**：验证 Peer A (`8888`) ⇄ Peer B (`9999`) 互相发现名片并双向完成 EIP-712 签名任务交付。
 
 ---
 
 ## 八、 完整端到端验收复现全流程（Step-by-Step Verification Walkthrough）
 
-为了让评审导师或外部研究员能够**在 3 分钟内 100% 精确复现我们刚才实测跑通的全链路结果**，系统预设了严密的四阶段验收流程：
+为了让评审导师或外部研究员能够**在 3 分钟内 100% 精确复现全链路结果**，系统提供四阶段标准验收流程：
 
 ```
-[阶段 1: 自动化自检]             [阶段 2: 核心身份推演]              [阶段 3: 单步协议校验]              [阶段 4: 手机 5G 公网穿透]
- node test_suite.js       node agent_alice_client.js demo-identity     card / quote / task        npx localtunnel -> 手机 5G 访问
-   (23/23 项全绿)           (3 次换脑 + 1 次升级，地址不变)       (A2A 1.0 JSON-RPC 闭环)         (免配置穿透电信 NAT 防火墙)
+[阶段 1: 43项全自动自检]         [阶段 2: P2P 门禁与多轮协商]         [阶段 3: 忒修斯之船身份推演]        [阶段 4: 双节点/跨网 P2P 对联]
+   node test_suite.js         node agent_alice_client.js demo-p2p   node agent_alice_client.js demo-identity   3001(8888) ⇄ 3002(9999) / loca.lt
+    (43/43 项全绿通过)          (询价+多轮追问+3道门禁+取消闭环)       (3 次换脑 + 1 次升级，地址不变)       (双向对等签名外呼与可视化交互)
 ```
 
-### 步骤一：全自动化基准排雷自检（耗时 10 秒）
-1. 终端窗口 1 启动 Bob 服务端：
-   ```powershell
-   node agent_bob_server.js
-   ```
-2. 终端窗口 2 运行全套自检脚本：
-   ```powershell
-   node test_suite.js
-   ```
-* **【验证通过标准】**：终端刷出绿色通过清单，末尾显示：`🎉 全部通过！一共完成 23 项测试，0 项失败。系统 100% 稳定就绪！`
+### 步骤一：全自动化 43 项基准自检（耗时 5 秒）
+直接运行自检脚本（脚本若检测到 3001/3002 未启动会自动在后台拉起双节点完成测试）：
+```powershell
+node test_suite.js
+```
+* **【验证通过标准】**：终端刷出 43 项绿色通过清单，末尾显示：`🎉 全部通过！一共完成 43 项严密测试，0 项失败。FOGA 对称 P2P 系统 100% 稳定就绪！`
 
 ---
 
-### 步骤二：双 Agent 业务协同与“忒修斯之船”实测（耗时 1 分钟）
-1. 保持 Bob 运行，电脑浏览器访问 `http://localhost:3001` 打开 **Agent Bob 实时控制台**；
-2. 终端窗口 2 运行 Alice 驱动：
+### 步骤二：P2P 协议五阶段与 L3 门禁实测（耗时 30 秒）
+1. 终端窗口 1 保持 `node agent_bob_server.js` 运行；
+2. 终端窗口 2 运行 P2P 协议与门禁演练驱动：
    ```powershell
-   node agent_alice_client.js demo-identity
+   node agent_alice_client.js demo-p2p
    ```
-* **【验证通过标准】**：
-  * Alice 分三阶段自动完成任务派发、触发 Bob 热切换大脑与升级技能；
-  * 终端打印出身份不变性裁决表，Bob 承载地址 `0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1` 保持 100% 恒定；
-  * 浏览器网页实时同步更新大脑状态与 A2A 协议报文日志。
+* **【验证通过标准】**：依次打印出公开询价（Quote）、缺参追问与续接（`TASK_STATE_INPUT_REQUIRED` -> `COMPLETED`）、三道门禁拦截（`gate=skill` / `gate=policy` / `gate=budget`）、任务取消（`TASK_STATE_CANCELED`）与隐私隔离列表（`ListTasks`）。
 
 ---
 
-### 步骤三：单步 A2A 能力与指令细分校验（耗时 1 分钟）
-在终端窗口 2 依次验证独立的 A2A 接口通道：
-1. **名片探测**：`node agent_alice_client.js card`（验证 A2A 1.0 机器可读规范）；
-2. **带签名询价**：`node agent_alice_client.js quote`（验证 FOGA-EIP712 签名防伪与 Hashlock 条款交付）；
-3. **自定义计算发包**：`node agent_alice_client.js task "请分析以太坊网络当前安全等级"`（验证 DeepSeek-R1 思维链执行与结果交付）。
+### 步骤三：双 Agent 协同与“忒修斯之船”身份确权实测（耗时 30 秒）
+```powershell
+node agent_alice_client.js demo-identity
+```
+* **【验证通过标准】**：分三阶段热切换 `heuristic-rule-engine`、`claude-3-5-sonnet`、`deepseek-r1` 并热挂载新技能，打印出身份不变性裁决表，承载地址 `0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1` 保持 100% 恒定。
 
 ---
 
-### 步骤四：跨公网安全隧道与手机 5G 异网穿透实测（耗时 1 分钟）
-1. 终端窗口 3 启动安全隧道：
-   ```powershell
-   npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1
-   ```
-   * 终端输出专属安全网址：`your url is: https://xxxx.loca.lt`；
-2. **手机脱网实测**：
-   * 拿出手机，**彻底关掉 Wi-Fi，仅使用手机卡 4G/5G 移动流量**（确保手机与电脑物理隔离在不同公网中）；
-   * 手机浏览器打开该 `https://xxxx.loca.lt` 链接；
-   * 点击页面上的【Click to Continue】跳过免责说明；
-* **【验证通过标准】**：
-  * 手机成功加载出电脑上的 Agent Bob 控制台；
-  * 在手机端触摸点击“切换到 DeepSeek R1”，电脑端终端窗口瞬间刷出同步的 A2A 报文与大模型热插拔日志，**彻底宣告电信运营商对称型 NAT 与防火墙被 100% 攻破**！
+### 步骤四：双节点对称 P2P 控制台与跨网隧道实测（耗时 1 分钟）
+1. 双击运行 [`启动_双节点P2P对等演练.bat`](./启动_双节点P2P对等演练.bat)（或分别运行 `node agent_bob_server.js` 与 `node agent_bob_server.js --peer-b`）；
+2. 浏览器自动打开 `http://localhost:3001`（节点 8888）与 `http://localhost:3002`（节点 9999）；
+3. 在任意节点的 **「🌐 P2P 对等节点双向连接器」** 中点击按钮 ①~⑧，即可直观看到两个独立 Agent 双向验签、多轮追问、触发对方 L3 门禁并实时生成 `Decision Record`；若配合 `npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1`，即可与手机 5G 或异地导师电脑实现跨公网对等互连！
 
 ---
 
@@ -249,13 +254,14 @@ $env:BOB_URL="https://your-tunnel-domain.loca.lt"; node agent_alice_client.js de
 ```
 foga-a2a-demo/
 ├── crypto_utils.js             # FOGA EIP-712 签名生成、验签、Nonce防重放缓存
-├── agent_bob_server.js         # 服务端 Agent Bob (A2A 1.0 JSON-RPC + 可插拔认知大脑 + Web控制台)
-├── agent_alice_client.js       # 客户端 Agent Alice (名片自动发现 + 签名发包 + 身份确权推演驱动)
-├── test_suite.js               # 23 项全功能边界与安全性自动化测试套件
+├── agent_bob_server.js         # 对称 P2P 节点核心 (A2A 1.0 服务端 + L3 三道门禁内核 + P2P 外呼客户端 + Web控制台)
+├── agent_alice_client.js       # 命令行验证驱动 (支持 demo-identity / demo-p2p / card / quote / task)
+├── test_suite.js               # 43 项全功能边界、L3 门禁与双节点对称 P2P 自动化测试套件
 ├── package.json                # 工程配置 (type: module, 仅依赖 ethers)
-├── 启动_Agent_Bob服务端.bat     # Windows 一键启动 Bob 服务端脚本 (端口: 3001)
+├── 启动_Agent_Bob服务端.bat     # Windows 一键启动单节点脚本 (端口: 3001, AID: 8888)
+├── 启动_双节点P2P对等演练.bat    # Windows 一键启动双对等节点脚本 (3001 ⇄ 3002 双向互调)
 ├── 启动_公网HTTPS安全隧道.bat   # Windows 一键启动公网安全隧道 (IPv4 强化绑定)
-├── 运行_Agent_Alice客户端.bat   # Windows 一键启动 Alice 自动化验证脚本
+├── 运行_Agent_Alice客户端.bat   # Windows 一键启动命令行自动化验证脚本
 ├── README.md                   # 本技术规范与交付文档
 └── 项目交接与全流程上下文总结.md # 遵循工作区铁律的交接与技术避坑总结文档
 ```
