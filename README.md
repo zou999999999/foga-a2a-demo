@@ -171,16 +171,22 @@ npm install
 |---|---|---|---|
 | **01** | **启动节点 A (AID 8888, 端口 3001)** | `node agent_bob_server.js` | 开启 Peer A 服务端与 P2P 双向控制台 (`http://localhost:3001`)。 |
 | **02** | **启动节点 B (AID 9999, 端口 3002)** | `node agent_bob_server.js --peer-b` | 开启对称 Peer B 节点 (`http://localhost:3002`)，可与 3001 双向互调。 |
-| **03** | **一键启动本机双节点 P2P 演练** | `.\启动_双节点P2P对等演练.bat` | 同时拉起 3001(8888) 与 3002(9999) 双节点及两个可视化控制台。 |
-| **04** | **开启公网 HTTPS 隧道** | `npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1` | 输出 `https://xxxx.loca.lt`，供异地导师节点或手机 5G 跨网互连。 |
-| **05** | **全自动身份确权推演** | `node agent_alice_client.js demo-identity` | 连续切换 3 种认知引擎与升级技能，验证链上地址 100% 恒定。 |
-| **06** | **全自动 P2P 五阶段与门禁演练** | `node agent_alice_client.js demo-p2p` | 自动演示询价、`INPUT_REQUIRED` 多轮续接、三道门禁拒单与 `CancelTask`。 |
-| **07** | **运行 43 项全自动化测试套件** | `node test_suite.js` | 自启动双节点，100% 自动化验证 14 大类 43 项安全、门禁与双向 P2P 指标。 |
+| **03** | **启动真 Agent 接管模式 (Antigravity/Codex)** | `node agent_bob_server.js --external` (或加 `--peer-b`) | 入站任务过完 L3 门禁后进入 `/agent/inbox`，由你的 Antigravity 或导师的 Codex 亲自思考并调用 `reply` 回复。 |
+| **04** | **一键启动本机双节点 P2P 演练** | `.\启动_双节点P2P对等演练.bat` | 同时拉起 3001(8888) 与 3002(9999) 双节点及两个可视化控制台。 |
+| **05** | **开启公网 HTTPS 隧道** | `npx.cmd --yes localtunnel --port 3001 --local-host 127.0.0.1` | 输出 `https://xxxx.loca.lt`，供异地导师节点或手机 5G 跨网互连。 |
+| **06** | **真 Agent 发送签名任务 (ask)** | `node agent_alice_client.js ask <对方隧道URL> "<问题>" --wait` | 由本地节点自动签名外呼对方，并等待对方 Codex / Antigravity 思考返回。 |
+| **07** | **真 Agent 查看待办与回复 (inbox / reply)** | `node agent_alice_client.js inbox` / `reply <taskId> "<回答>"` | 供 Antigravity 或导师 Codex 读取待办并注入真实推理结果（详情见 [`AGENT_BRIEF.md`](./AGENT_BRIEF.md)）。 |
+| **08** | **运行 47 项全自动化测试套件** | `node test_suite.js` | 自启动双节点，100% 自动化验证 15 大类 47 项安全、门禁、P2P 与真 Agent 桥接指标。 |
 
-### 4. 与导师跨城市/跨路由器真实 P2P 对联方法
-1. **学生电脑**：运行 `node agent_bob_server.js`（默认 AID `8888`，端口 `3001`），并开启隧道拿到 `https://student-node.loca.lt`；
-2. **导师电脑**：克隆本仓库，运行 `node agent_bob_server.js --peer-b`（AID `9999`，端口 `3002`），并开启隧道 `--port 3002` 拿到 `https://mentor-node.loca.lt`；
-3. **双向对等交互**：双方在各自浏览器控制台的 **「🌐 P2P 对等节点双向连接器」** 输入框中填入对方的 `https://xxx.loca.lt` 地址，即可直接用各自节点的私钥互相拉取名片、发起签名任务、测试多轮追问与 L3 门禁拦截！
+### 4. 与导师跨城市/跨路由器真实 Agent-to-Agent 对联方法（Antigravity ⇄ Codex）
+1. **学生端（Antigravity 操控 Peer A `8888`）**：
+   - 你直接对 **Antigravity** 说：*“请按 `AGENT_BRIEF.md` 启动我的 8888 节点（`--external`）并开启公网隧道”* -> 拿到你的隧道地址 `https://student-8888.loca.lt`；
+2. **导师端（Codex / Claude Code 操控 Peer B `9999`）**：
+   - 导师拉取本仓库后，直接对他的 **Codex** 说：*“请阅读 [`AGENT_BRIEF.md`](./AGENT_BRIEF.md)，启动我的 9999 号节点（`--peer-b --external`）并开启公网隧道”* -> 拿到导师的隧道地址 `https://mentor-9999.loca.lt`；
+3. **双端真 AI Agent 跨网对话**：
+   - 你对 **Antigravity** 说：*“连上导师的隧道 `https://mentor-9999.loca.lt`，向导师的 Agent 请教/派发一个任务”*；
+   - 导师对他的 **Codex** 说：*“查看我的节点收件箱（`inbox`），用你的思考回复学生 Agent 发来的任务”*；
+   - 双方的 **Antigravity** 与 **Codex** 作为各自的 **L4 认知大脑** 亲自完成推理，而底层的 **FOGA L3 内核** 全自动负责 **跨 NAT 隧道路由、`FOGA-EIP712` 请求级签名验签、三道门禁裁决、生成 `Decision Record` 以及锁定各自的链上法定身份（`8888` vs `9999`）**！
 
 ---
 

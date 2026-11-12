@@ -559,6 +559,82 @@ async function runTests() {
     } catch (err) {
       assert(false, "14.1 双节点对称 P2P 互调测试", err.message);
     }
+
+    // 15. External Agent Takeover Mode (Antigravity 8888 ⇄ Mentor Codex 9999 Real Brain Bridge)
+    try {
+      // 15.1 Switch Peer B (9999) into External Agent mode (`external-codex`)
+      await fetch(`${PEER_B_HOST}/control/switch-llm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llm: "external-codex" })
+      });
+
+      // 15.2 Peer A (8888, driven by Antigravity) sends a task to Peer B (9999)
+      const askRes = await fetch(`${TARGET_HOST}/peer/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          peerUrl: PEER_B_HOST,
+          action: "tender",
+          tokenId: "T-EXT-CODEX-1",
+          skill: "foga-probe",
+          prompt: "Antigravity (8888) asks Mentor Codex (9999): How does L3 enforce deterministic safety?"
+        })
+      });
+      const askData = await askRes.json();
+      const workingTask = askData.rpcResponse?.result?.task;
+      assert(
+        workingTask?.status?.state === "TASK_STATE_WORKING",
+        "15.1 External Agent 模式下，入站任务通过 L3 门禁后进入 TASK_STATE_WORKING 等待真 Agent 思考"
+      );
+
+      // 15.3 Mentor's Codex checks Peer B's `/agent/inbox`
+      const inboxRes = await fetch(`${PEER_B_HOST}/agent/inbox`);
+      const inboxData = await inboxRes.json();
+      const queuedItem = inboxData.pendingTasks?.find(t => t.taskId === workingTask.id);
+      assert(
+        Boolean(queuedItem) && queuedItem.callerAddress === cellAddress,
+        "15.2 导师端 /agent/inbox 准确捕获来自学生节点 (8888) 的待处理签名任务"
+      );
+
+      // 15.4 Mentor's Codex submits its real LLM reasoning via `POST /agent/reply`
+      const codexReplyRes = await fetch(`${PEER_B_HOST}/agent/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: workingTask.id,
+          replyText: "Codex verified: L3 enforces permission, safety, skill, policy, budget, and wallet gates deterministically before any state transition.",
+          modelName: "external-codex"
+        })
+      });
+      const codexReplyData = await codexReplyRes.json();
+      assert(
+        codexReplyData.ok === true && codexReplyData.task?.status?.state === "TASK_STATE_COMPLETED",
+        "15.3 导师 Codex 通过 /agent/reply 注入真实推理结果后，L3 内核自动完成哈希存证并流转为 COMPLETED"
+      );
+
+      // 15.5 Peer A (Antigravity) retrieves the completed deliverable via GetTask
+      const checkRes = await fetch(`${TARGET_HOST}/peer/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          peerUrl: PEER_B_HOST,
+          action: "get-task",
+          taskId: workingTask.id
+        })
+      });
+      const checkData = await checkRes.json();
+      const finalSub = checkData.rpcResponse?.result?.task?.artifacts?.[0]?.parts?.[0]?.data?.foga?.submission;
+      assert(
+        finalSub?.cognitiveProvider === "external" &&
+        finalSub?.cognitiveEngine === "external-codex" &&
+        finalSub?.deliverable?.includes("Codex verified") &&
+        finalSub?.cellAccount === aliceWallet.address,
+        "15.4 学生 Antigravity 成功拉取导师 Codex 亲笔回答，且对方 9999 链上身份地址保持 100% 恒定"
+      );
+    } catch (err) {
+      assert(false, "15.1 External Agent (Antigravity ⇄ Codex) 桥接测试", err.message);
+    }
   } finally {
     if (spawnedPeerA) spawnedPeerA.kill();
     if (spawnedPeerB) spawnedPeerB.kill();

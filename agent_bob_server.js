@@ -15,7 +15,11 @@
  *    - Gate 3: Wallet / Operator Allow-list Permission (`wallet`)
  *    - Three-step pipeline: `tender_precheck` -> `skill_run` -> `tender_submit`
  *    - Immutable `DecisionRecord` generation with `promptHash` & `responseHash`
- * 3. L4 Pluggable Cognitive Adapter (`stub` deterministic rule table / model adapters) & Ship of Theseus Invariance
+ * 3. L4 Pluggable Cognitive Adapter & `--model external` Bridge (`Antigravity` ⇄ `Codex` Real Agent Takeover)
+ *    - Supports built-in deterministic `stub` (`heuristic-rule-engine`) and simulated model adapters
+ *    - Supports `external-agent` mode (`GET /agent/inbox`, `POST /agent/reply`) where an external AI Coding Agent
+ *      (e.g., Student's Antigravity or Mentor's Codex / Claude Code) acts as the real L4 proposer while L3 enforces
+ *      all cryptographic signatures, gates, and on-chain identity invariance ("Ship of Theseus").
  * 4. Symmetric P2P Outbound Client (`/peer/discover`, `/peer/send`) for Peer-to-Peer NAT-traversed interaction
  */
 
@@ -34,11 +38,12 @@ import {
 // CLI Argument & Environment Parsing for Symmetric Peer Deployment
 const args = process.argv.slice(2);
 const isPeerBFlag = args.includes("--peer-b") || process.env.PEER_ROLE === "B";
+const isExternalFlag = args.includes("--external") || process.env.FOGA_MODEL === "external";
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : (isPeerBFlag ? 3002 : 3001);
 const HOST = "0.0.0.0";
 
-// Pre-configured deterministic identities for Peer A (Bob, 8888) and Peer B (Alice/Mentor, 9999)
+// Pre-configured deterministic identities for Peer A (Student / 8888) and Peer B (Mentor / 9999)
 const DEFAULT_KEY_A = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
 const DEFAULT_KEY_B = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
@@ -46,7 +51,7 @@ const NODE_PRIVATE_KEY = process.env.CELL_PRIVATE_KEY || process.env.BOB_PRIVATE
 export const bobWallet = new ethers.Wallet(NODE_PRIVATE_KEY);
 export const bobCellAddress = bobWallet.address;
 export const bobAgentId = process.env.AGENT_ID || (isPeerBFlag ? "9999" : "8888");
-export const nodeName = process.env.AGENT_NAME || (isPeerBFlag ? "Agent Alice (Peer Cell #9999)" : "Agent Bob (Data & Compute Cell)");
+export const nodeName = process.env.AGENT_NAME || (isPeerBFlag ? "Agent Mentor-Peer (Cell #9999)" : "Agent Bob (Data & Compute Cell)");
 export const defaultPeerUrl = process.env.PEER_URL || (PORT === 3001 ? "http://localhost:3002" : "http://localhost:3001");
 
 // A2A 1.0 Standard Error Codes (`src/a2a/types.ts`)
@@ -73,7 +78,9 @@ export const TERMINAL_STATES = [
 ];
 
 // L3 Kernel State & Policy Configuration (`cell.config.json` equivalent)
-let currentLlmEngine = "heuristic-rule-engine"; // Default deterministic stub adapter
+let currentLlmEngine = isExternalFlag
+  ? (isPeerBFlag ? "external-codex" : "external-antigravity")
+  : "heuristic-rule-engine";
 let safetyState = "ACTIVE"; // "ACTIVE" | "SUSPENDED" (Guardian safety switch)
 let taskCounter = 0;
 
@@ -167,6 +174,7 @@ function logEvent(type, message, details = {}) {
     A2A: "\x1b[36m",   // Cyan
     AUTH: "\x1b[32m",  // Green
     GATE: "\x1b[34m",  // Blue
+    AGENT: "\x1b[95m", // Bright Magenta
     WARN: "\x1b[33m",  // Yellow
     ERROR: "\x1b[31m", // Red
     STATE: "\x1b[35m"  // Magenta
@@ -175,17 +183,31 @@ function logEvent(type, message, details = {}) {
   console.log(`${color}[${type} ${timestamp}]\x1b[0m ${message}`, Object.keys(details).length ? details : "");
 }
 
+function isExternalBrainActive() {
+  return currentLlmEngine.startsWith("external");
+}
+
 /**
  * L4 Cognitive Proposal Adapter (`Perceive -> Propose`)
- * Computes deterministic output and hashes (`promptHash`, `responseHash`) without holding keys or decision power.
+ * Computes deterministic output (or wraps External Agent output from Antigravity/Codex)
+ * and hashes (`promptHash`, `responseHash`) without holding keys or decision power.
  */
-function executeWithCognitiveEngine(promptText, skillName) {
+function executeWithCognitiveEngine(promptText, skillName, externalOverride = null) {
   const tId = ++taskCounter;
   budgetBook.modelCallsToday++;
   const promptHash = keccak256(toUtf8Bytes(`${skillName}:${promptText}`));
 
   let result;
-  if (currentLlmEngine === "heuristic-rule-engine") {
+  if (externalOverride && externalOverride.replyText) {
+    const modelLabel = externalOverride.modelName || currentLlmEngine || "external-agent";
+    const output = `[${modelLabel}] ${externalOverride.replyText}`;
+    result = {
+      provider: "external",
+      engine: modelLabel,
+      architecture: `FOGA External Agent Bridge (Driven live by ${modelLabel})`,
+      output
+    };
+  } else if (currentLlmEngine === "heuristic-rule-engine") {
     const output = `[Rule-Stub-v1] Processed task #${tId} for skill [${skillName}]. Status: Verified OK. Input analysis: "${promptText}". Execution deterministic hash: ${keccak256(toUtf8Bytes(promptText + tId)).slice(0, 18)}`;
     result = {
       provider: "stub",
@@ -210,11 +232,11 @@ function executeWithCognitiveEngine(promptText, skillName) {
       output
     };
   } else {
-    const output = `[${currentLlmEngine}] Executed task #${tId} successfully for ${skillName}.`;
+    const output = `[${currentLlmEngine}] Executed task #${tId} successfully for ${skillName}: "${promptText}"`;
     result = {
-      provider: "custom-adapter",
+      provider: isExternalBrainActive() ? "external" : "custom-adapter",
       engine: currentLlmEngine,
-      architecture: "Custom External L4 Cognitive Adapter",
+      architecture: "External / Custom L4 Cognitive Adapter",
       output
     };
   }
@@ -232,11 +254,6 @@ function executeWithCognitiveEngine(promptText, skillName) {
 
 /**
  * L3 Kernel `Catalog.invoke` — The Three Checks (`docs/node.md`, lines 30-46)
- * Every act goes through `catalogInvoke` in strict order:
- * 1. Call permission (`permission`, `input`)
- * 2. Business authorization (`safety`, `skill`, `policy`, `budget`)
- * 3. Wallet permission (`wallet`)
- * Writes an immutable Decision Record on every attempt (allowed or refused).
  */
 function recordDecision({ caller, capability, input, verdict, gate, reason, jobId = null, operationId = null, modelMeta = null }) {
   const dec = {
@@ -247,13 +264,13 @@ function recordDecision({ caller, capability, input, verdict, gate, reason, jobI
     capability,
     mode: "act",
     inputHash: keccak256(toUtf8Bytes(JSON.stringify(input || {}))),
-    verdict, // "allowed" | "refused"
-    gate,    // "permission" | "input" | "safety" | "skill" | "policy" | "budget" | "wallet" | "none"
+    verdict,
+    gate,
     reason,
     jobId,
     operationId,
     model: modelMeta || {
-      provider: "stub",
+      provider: isExternalBrainActive() ? "external" : "stub",
       model: currentLlmEngine,
       promptHash: keccak256(toUtf8Bytes(String(capability))),
       responseHash: keccak256(toUtf8Bytes(String(verdict)))
@@ -264,7 +281,7 @@ function recordDecision({ caller, capability, input, verdict, gate, reason, jobI
   return dec;
 }
 
-function catalogInvoke(capability, input, caller) {
+function catalogInvoke(capability, input, caller, externalOverride = null) {
   // Check 1: Call Permission & Input Schema (`permission`, `input`)
   if (!caller || !caller.authenticated) {
     const dec = recordDecision({
@@ -306,7 +323,7 @@ function catalogInvoke(capability, input, caller) {
     return { ok: false, gate: "safety", reason: dec.reason, decisionId: dec.id };
   }
 
-  // Check 2B: Skill Gate (`skill` — Held & offered verification + packageHash commitment check)
+  // Check 2B: Skill Gate (`skill` — Held & offered verification)
   if (input.skill) {
     const foundSkill = heldSkills.find(s => s.name === input.skill && s.offered !== false);
     if (!foundSkill) {
@@ -324,7 +341,7 @@ function catalogInvoke(capability, input, caller) {
     }
   }
 
-  // Check 2C: Policy Gate (`policy` — Minimum reward floor & window rules)
+  // Check 2C: Policy Gate (`policy` — Minimum reward floor)
   if (input.rewardWei !== undefined) {
     const reward = BigInt(String(input.rewardWei));
     if (reward < policyConfig.minRewardWei) {
@@ -402,7 +419,7 @@ function catalogInvoke(capability, input, caller) {
     };
   } else if (capability === "skill_run") {
     budgetBook.skillRunsCount++;
-    const execRes = executeWithCognitiveEngine(input.prompt || "Execute FOGA skill", input.skill);
+    const execRes = executeWithCognitiveEngine(input.prompt || "Execute FOGA skill", input.skill, externalOverride);
     modelMeta = {
       provider: execRes.provider,
       model: execRes.engine,
@@ -410,6 +427,7 @@ function catalogInvoke(capability, input, caller) {
       responseHash: execRes.responseHash
     };
     output = {
+      provider: execRes.provider,
       engine: execRes.engine,
       architecture: execRes.architecture,
       deliverable: execRes.output,
@@ -425,7 +443,7 @@ function catalogInvoke(capability, input, caller) {
     if (input.valueWei) {
       budgetBook.spentValueWei += BigInt(String(input.valueWei));
     }
-    budgetBook.spentFeesWei += BigInt("21000000000000"); // Simulated gas fee accounting
+    budgetBook.spentFeesWei += BigInt("21000000000000");
     const txHash = keccak256(toUtf8Bytes(`${jobId}:${input.tokenId}:${input.resultHash}`));
     output = {
       submissionId: `sub-${randomUUID().slice(0, 8)}`,
@@ -489,6 +507,7 @@ function buildAgentCard(baseUrl) {
       pushNotifications: false,
       extendedAgentCard: false,
       cognitiveEngine: currentLlmEngine,
+      externalAgentMode: isExternalBrainActive(),
       safetyState
     },
     defaultInputModes: ["text/plain", "application/json"],
@@ -526,9 +545,6 @@ function makeAgentMessage(text, data, taskId, contextId) {
   };
 }
 
-/**
- * Parse `foga` request from message parts (`src/a2a/server.ts#fogaRequestOf`)
- */
 function parseFogaRequest(message) {
   const parts = message?.parts || [];
   let promptFromText = "";
@@ -541,7 +557,6 @@ function parseFogaRequest(message) {
     if (p.data && typeof p.data === "object" && p.data.foga) {
       const f = p.data.foga;
       const rawMode = f.mode || "quote";
-      // Support both "tender" (strict FOGA spec) and "task" (legacy test compatibility)
       const mode = (rawMode === "tender" || rawMode === "task") ? rawMode : "quote";
       const prompt = f.input?.prompt || promptFromText || "General FOGA skill execution";
       return {
@@ -549,6 +564,7 @@ function parseFogaRequest(message) {
         skill: f.skill,
         tokenId: f.tokenId !== undefined ? String(f.tokenId) : undefined,
         requireInput: Boolean(f.requireInput),
+        waitForExternal: Boolean(f.waitForExternal),
         rewardWei: f.rewardWei,
         valueWei: f.valueWei,
         input: f.input,
@@ -594,6 +610,109 @@ function formatPublicTask(stored, historyLength, includeArtifacts = true) {
 }
 
 /**
+ * Complete steps 2 & 3 (`skill_run` -> `tender_submit`) of a prechecked task.
+ * Called immediately in automatic `stub` mode, or called via `POST /agent/reply` when an External Agent
+ * (Antigravity / Codex / Claude Code) finishes thinking and submits its response!
+ */
+function finalizeTaskExecution(stored, caller, externalOverride = null) {
+  const resolvedTokenId = stored.tokenId;
+  const resolvedSkill = stored.skill || heldSkills[0].name;
+  const resolvedPrompt = stored.prompt || "Execute FOGA skill";
+
+  logEvent("A2A", `Executing Task #${taskCounter + 1} with [${externalOverride?.modelName || currentLlmEngine}] for ${caller.id}`, {
+    skill: resolvedSkill,
+    tokenId: resolvedTokenId
+  });
+
+  // Step 2: `skill_run` via L3 Catalog.invoke
+  const run = catalogInvoke("skill_run", {
+    tokenId: resolvedTokenId,
+    skill: resolvedSkill,
+    prompt: resolvedPrompt
+  }, caller, externalOverride);
+
+  if (!run.ok) {
+    const msg = makeAgentMessage(
+      `Skill run for tender ${resolvedTokenId} refused at gate [${run.gate}]: ${run.reason}`,
+      { foga: { gate: run.gate, reason: run.reason, decisionId: run.decisionId } },
+      stored.task.id,
+      stored.task.contextId
+    );
+    setTaskState(stored, "TASK_STATE_REJECTED", msg);
+    return;
+  }
+  stored.jobs.run = run.jobId;
+
+  // Step 3: `tender_submit` via L3 Catalog.invoke
+  const sub = catalogInvoke("tender_submit", {
+    tokenId: resolvedTokenId,
+    skill: resolvedSkill,
+    resultHash: run.output.resultHash,
+    runReceipt: run.output.runReceipt,
+    valueWei: stored.valueWei
+  }, caller, externalOverride);
+
+  if (!sub.ok) {
+    const msg = makeAgentMessage(
+      `Submission for tender ${resolvedTokenId} refused at gate [${sub.gate}]: ${sub.reason}`,
+      { foga: { gate: sub.gate, reason: sub.reason, decisionId: sub.decisionId, jobId: sub.jobId } },
+      stored.task.id,
+      stored.task.contextId
+    );
+    setTaskState(stored, "TASK_STATE_REJECTED", msg);
+    return;
+  }
+  stored.jobs.submit = sub.jobId;
+
+  // Build final deliverable artifact
+  stored.task.artifacts = [
+    {
+      artifactId: randomUUID(),
+      name: "submission",
+      description: "Task execution deliverable and FOGA L3 decision proof",
+      parts: [
+        {
+          data: {
+            foga: {
+              submission: {
+                tokenId: resolvedTokenId,
+                cellAccount: bobCellAddress,
+                agentId: bobAgentId,
+                callerSigner: caller.id,
+                callerAgentId: caller.agentId || null,
+                skill: resolvedSkill,
+                cognitiveProvider: run.output.provider,
+                cognitiveEngine: run.output.engine,
+                engineArchitecture: run.output.architecture,
+                deliverable: run.output.deliverable,
+                resultHash: run.output.resultHash,
+                answerHash: run.output.answerHash,
+                submissionId: sub.output.submissionId,
+                txHash: sub.output.txHash,
+                jobId: sub.jobId,
+                decisionId: sub.decisionId,
+                jobs: stored.jobs,
+                operations: sub.operations,
+                verifiedAt: new Date().toISOString()
+              }
+            }
+          },
+          mediaType: "application/json"
+        }
+      ]
+    }
+  ];
+
+  const completeMsg = makeAgentMessage(
+    run.output.deliverable,
+    undefined,
+    stored.task.id,
+    stored.task.contextId
+  );
+  setTaskState(stored, "TASK_STATE_COMPLETED", completeMsg);
+}
+
+/**
  * Process a task through either the Quote Road or the Tender/Task Road
  */
 function workTask(stored, message, caller) {
@@ -603,7 +722,6 @@ function workTask(stored, message, caller) {
   if (req.mode === "quote") {
     const offered = heldSkills.filter(s => s.offered !== false);
 
-    // If caller asks for a specific skill that this cell does NOT offer -> TASK_STATE_REJECTED (`src/a2a/server.ts#L225`)
     if (req.skill && !offered.some(s => s.name === req.skill)) {
       logEvent("A2A", `Quote rejected: skill '${req.skill}' not offered`, { caller: caller.id });
       const msg = makeAgentMessage(
@@ -670,13 +788,15 @@ function workTask(stored, message, caller) {
   }
 
   // ROAD 2: TENDER / TASK (`mode: "tender"` or `"task"`)
-  // Multi-turn negotiation check: In strict "tender" mode (or when requireInput is set), tokenId is required!
   const resolvedTokenId = req.tokenId || stored.tokenId || (req.mode === "task" && !req.requireInput ? `auto-tender-${taskCounter + 1}` : undefined);
   const resolvedSkill = req.skill || stored.skill || heldSkills[0].name;
   const resolvedPrompt = (req.input?.prompt || req.prompt !== "General FOGA skill execution") ? req.prompt : (stored.prompt || req.prompt);
 
   stored.skill = resolvedSkill;
   stored.prompt = resolvedPrompt;
+  stored.rewardWei = req.rewardWei;
+  stored.valueWei = req.valueWei;
+  stored.callerObj = caller;
 
   if (!resolvedTokenId) {
     logEvent("A2A", `Task ${stored.task.id.slice(0, 8)} requires input: missing tokenId (TASK_STATE_INPUT_REQUIRED)`, { caller: caller.id });
@@ -713,95 +833,24 @@ function workTask(stored, message, caller) {
   }
   stored.jobs.precheck = pre.jobId;
 
-  // Step 2: `skill_run` via L3 Catalog.invoke
-  logEvent("A2A", `Executing Task #${taskCounter + 1} with [${currentLlmEngine}] for ${caller.id}`, {
-    skill: resolvedSkill,
-    tokenId: resolvedTokenId
-  });
-
-  const run = catalogInvoke("skill_run", {
-    tokenId: resolvedTokenId,
-    skill: resolvedSkill,
-    prompt: resolvedPrompt
-  }, caller);
-
-  if (!run.ok) {
-    const msg = makeAgentMessage(
-      `Skill run for tender ${resolvedTokenId} refused at gate [${run.gate}]: ${run.reason}`,
-      { foga: { gate: run.gate, reason: run.reason, decisionId: run.decisionId } },
+  // Check if node is in External Agent Takeover Mode (`external-codex` / `external-antigravity` or explicit `waitForExternal`)
+  if (isExternalBrainActive() || req.waitForExternal) {
+    logEvent("AGENT", `Task ${stored.task.id.slice(0, 8)} passed L3 precheck -> Queued in /agent/inbox for External Agent [${currentLlmEngine}]!`, {
+      caller: caller.id,
+      prompt: resolvedPrompt
+    });
+    const workingMsg = makeAgentMessage(
+      `Passed L3 tender_precheck (job ${pre.jobId}). Awaiting live reasoning from External Agent [${currentLlmEngine}] via /agent/inbox & /agent/reply.`,
+      { foga: { awaitingExternalAgent: currentLlmEngine, precheckJobId: pre.jobId, taskId: stored.task.id } },
       stored.task.id,
       stored.task.contextId
     );
-    setTaskState(stored, "TASK_STATE_REJECTED", msg);
+    setTaskState(stored, "TASK_STATE_WORKING", workingMsg);
     return;
   }
-  stored.jobs.run = run.jobId;
 
-  // Step 3: `tender_submit` via L3 Catalog.invoke
-  const sub = catalogInvoke("tender_submit", {
-    tokenId: resolvedTokenId,
-    skill: resolvedSkill,
-    resultHash: run.output.resultHash,
-    runReceipt: run.output.runReceipt,
-    valueWei: req.valueWei
-  }, caller);
-
-  if (!sub.ok) {
-    const msg = makeAgentMessage(
-      `Submission for tender ${resolvedTokenId} refused at gate [${sub.gate}]: ${sub.reason}`,
-      { foga: { gate: sub.gate, reason: sub.reason, decisionId: sub.decisionId, jobId: sub.jobId } },
-      stored.task.id,
-      stored.task.contextId
-    );
-    setTaskState(stored, "TASK_STATE_REJECTED", msg);
-    return;
-  }
-  stored.jobs.submit = sub.jobId;
-
-  // Build final deliverable artifact
-  stored.task.artifacts = [
-    {
-      artifactId: randomUUID(),
-      name: "submission",
-      description: "Task execution deliverable and FOGA L3 decision proof",
-      parts: [
-        {
-          data: {
-            foga: {
-              submission: {
-                tokenId: resolvedTokenId,
-                cellAccount: bobCellAddress,
-                agentId: bobAgentId,
-                callerSigner: caller.id,
-                skill: resolvedSkill,
-                cognitiveEngine: run.output.engine,
-                engineArchitecture: run.output.architecture,
-                deliverable: run.output.deliverable,
-                resultHash: run.output.resultHash,
-                answerHash: run.output.answerHash,
-                submissionId: sub.output.submissionId,
-                txHash: sub.output.txHash,
-                jobId: sub.jobId,
-                decisionId: sub.decisionId,
-                jobs: stored.jobs,
-                operations: sub.operations,
-                verifiedAt: new Date().toISOString()
-              }
-            }
-          },
-          mediaType: "application/json"
-        }
-      ]
-    }
-  ];
-
-  const completeMsg = makeAgentMessage(
-    run.output.deliverable,
-    undefined,
-    stored.task.id,
-    stored.task.contextId
-  );
-  setTaskState(stored, "TASK_STATE_COMPLETED", completeMsg);
+  // Otherwise, finalize synchronously with the active adapter (`stub` / simulated adapter)
+  finalizeTaskExecution(stored, caller, null);
 }
 
 /**
@@ -809,7 +858,6 @@ function workTask(stored, message, caller) {
  */
 async function callRemotePeerA2A(peerUrl, rpcMethod, rpcParams) {
   const cleanBase = peerUrl.replace(/\/+$/, "");
-  // Step 1: Discover remote peer's AgentCard to know its verifyingContract (cellAddress)
   const cardRes = await fetch(`${cleanBase}/.well-known/agent-card.json`, {
     headers: { "Bypass-Tunnel-Reminder": "true" }
   });
@@ -822,7 +870,6 @@ async function callRemotePeerA2A(peerUrl, rpcMethod, rpcParams) {
     throw new Error("Remote AgentCard missing provider.account");
   }
 
-  // Step 2: Build JSON-RPC 2.0 body and sign with THIS node's wallet
   const rpcBody = {
     jsonrpc: "2.0",
     id: Date.now(),
@@ -839,7 +886,6 @@ async function callRemotePeerA2A(peerUrl, rpcMethod, rpcParams) {
     agentId: bobAgentId
   });
 
-  // Step 3: Send POST /a2a with A2A-Version: 1.0 and EIP-712 Authorization
   const a2aRes = await fetch(`${cleanBase}/a2a`, {
     method: "POST",
     headers: {
@@ -881,7 +927,6 @@ export const server = http.createServer(async (req, res) => {
   const pathname = url.pathname;
   const method = req.method.toUpperCase();
 
-  // CORS Headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, A2A-Version, Authorization, Bypass-Tunnel-Reminder");
@@ -935,7 +980,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Audit Item #1: Strict `A2A-Version: 1.0` check (`src/a2a/server.ts#L121-L122`)
+    // Strict `A2A-Version: 1.0` check
     const rawVersionHeader = req.headers["a2a-version"] || url.searchParams.get("A2A-Version") || "";
     const version = String(rawVersionHeader).trim() || "0.3";
     if (version !== "1.0") {
@@ -953,7 +998,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Verify EIP-712 Request Signature Header (if present)
+    // Verify EIP-712 Request Signature Header
     const authHeader = req.headers["authorization"];
     let authVerdict = { ok: false, reason: "Anonymous (No Authorization header provided)" };
     if (authHeader) {
@@ -1013,7 +1058,6 @@ export const server = http.createServer(async (req, res) => {
       const msgId = m.messageId || `auto-msg-${randomUUID()}`;
       m.messageId = msgId;
 
-      // Check if execution mode is requested without signature (HTTP 403 boundary check)
       const parsedReq = parseFogaRequest(m);
       if ((parsedReq.mode === "task" || parsedReq.mode === "tender") && !authVerdict.ok) {
         logEvent("WARN", `Rejected unsigned ${parsedReq.mode} request (Signature required for execution)`);
@@ -1038,7 +1082,7 @@ export const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // Audit Item #2: `(caller, messageId)` Idempotent Deduplication (`src/a2a/server.ts#L169-L174`)
+      // `(caller, messageId)` Idempotent Deduplication
       const dedupeKey = `${caller.id.toLowerCase()}:${msgId}`;
       if (messageDedupe.has(dedupeKey)) {
         const existingTaskId = messageDedupe.get(dedupeKey);
@@ -1055,7 +1099,7 @@ export const server = http.createServer(async (req, res) => {
         }
       }
 
-      // Audit Item #3: Continuation of an existing task (`m.taskId`)
+      // Continuation of an existing task (`m.taskId`)
       if (m.taskId) {
         const stored = tasksStore.get(m.taskId);
         if (!stored || !isTaskVisible(stored, caller)) {
@@ -1118,6 +1162,7 @@ export const server = http.createServer(async (req, res) => {
           }
         },
         caller: caller.id,
+        callerAgentId: caller.agentId,
         messageIds: [msgId],
         createdAt: new Date().toISOString(),
         jobs: {}
@@ -1136,7 +1181,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Method 2: GetTask (`src/a2a/server.ts#L268-L273`) — Enforces Caller Visibility Isolation
+    // Method 2: GetTask
     if (rpcMethod === "GetTask") {
       const targetId = params?.id || params?.taskId;
       if (!targetId || typeof targetId !== "string") {
@@ -1171,7 +1216,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Method 3: ListTasks (`src/a2a/server.ts#L275-L286`) — Scoped to Authenticated Caller
+    // Method 3: ListTasks
     if (rpcMethod === "ListTasks") {
       const all = Array.from(tasksStore.values());
       let visibleTasks = all.filter(t => isTaskVisible(t, caller));
@@ -1201,7 +1246,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Method 4: CancelTask (`src/a2a/server.ts#L288-L302`)
+    // Method 4: CancelTask
     if (rpcMethod === "CancelTask") {
       const targetId = params?.id || params?.taskId;
       if (!targetId || typeof targetId !== "string") {
@@ -1265,7 +1310,6 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Standard Unsupported Operations (`src/a2a/server.ts#L138-L148`)
     if (["SendStreamingMessage", "SubscribeToTask", "GetExtendedAgentCard"].includes(rpcMethod)) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -1301,7 +1345,103 @@ export const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // C. Dynamic Control APIs (Ship of Theseus & L3 Guardian Controls)
+  // C. External Agent Bridge APIs (`/agent/inbox`, `/agent/reply`) — FOGA `--model external` (`Antigravity` ⇄ `Codex`)
+  if (pathname === "/agent/inbox" && method === "GET") {
+    const allTasks = Array.from(tasksStore.values());
+    const pendingTasks = allTasks
+      .filter(t => t.task.status.state === "TASK_STATE_WORKING" || t.task.status.state === "TASK_STATE_INPUT_REQUIRED")
+      .map(t => ({
+        taskId: t.task.id,
+        state: t.task.status.state,
+        callerAddress: t.caller,
+        callerAgentId: t.callerAgentId,
+        tokenId: t.tokenId,
+        skill: t.skill,
+        prompt: t.prompt,
+        createdAt: t.createdAt,
+        precheckJobId: t.jobs?.precheck
+      }));
+
+    const recentInbound = allTasks.slice(-10).reverse().map(t => ({
+      taskId: t.task.id,
+      state: t.task.status.state,
+      callerAddress: t.caller,
+      callerAgentId: t.callerAgentId,
+      skill: t.skill,
+      prompt: t.prompt,
+      deliverable: t.task.artifacts?.[0]?.parts?.[0]?.data?.foga?.submission?.deliverable || null,
+      cognitiveEngine: t.task.artifacts?.[0]?.parts?.[0]?.data?.foga?.submission?.cognitiveEngine || null
+    }));
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      nodeName,
+      cellAddress: bobCellAddress,
+      agentId: bobAgentId,
+      currentLlmEngine,
+      externalAgentMode: isExternalBrainActive(),
+      pendingCount: pendingTasks.length,
+      pendingTasks,
+      recentInbound
+    }, null, 2));
+    return;
+  }
+
+  if (pathname === "/agent/reply" && method === "POST") {
+    try {
+      const raw = await readBody();
+      const { taskId, replyText, modelName } = JSON.parse(raw || "{}");
+      if (!taskId || !replyText) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "Both taskId and replyText are required" }));
+        return;
+      }
+
+      const stored = tasksStore.get(taskId);
+      if (!stored) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: `Task ${taskId} not found` }));
+        return;
+      }
+      if (TERMINAL_STATES.includes(stored.task.status.state)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: `Task ${taskId} is already in terminal state ${stored.task.status.state}` }));
+        return;
+      }
+
+      const effectiveModel = modelName || (isExternalBrainActive() ? currentLlmEngine : "external-agent");
+      const caller = stored.callerObj || {
+        id: stored.caller,
+        agentId: stored.callerAgentId,
+        authenticated: true,
+        level: "act",
+        visibility: "caller"
+      };
+
+      logEvent("AGENT", `External Agent [${effectiveModel}] submitted real reasoning for Task ${taskId.slice(0, 8)}!`, {
+        replyPreview: String(replyText).slice(0, 80)
+      });
+
+      finalizeTaskExecution(stored, caller, {
+        replyText: String(replyText),
+        modelName: effectiveModel
+      });
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        message: "External Agent reply sealed into A2A submission artifact",
+        task: formatPublicTask(stored)
+      }, null, 2));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  // D. Dynamic Control APIs (Ship of Theseus & L3 Guardian Controls)
   if (pathname === "/control/switch-llm" && method === "POST") {
     const raw = await readBody();
     const data = JSON.parse(raw || "{}");
@@ -1314,6 +1454,7 @@ export const server = http.createServer(async (req, res) => {
       message: "LLM switched successfully",
       previousEngine: oldEngine,
       currentEngine: currentLlmEngine,
+      externalAgentMode: isExternalBrainActive(),
       identityInvariance: {
         agentAccount: bobCellAddress,
         agentId: bobAgentId,
@@ -1375,7 +1516,7 @@ export const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // D. Outbound Symmetric P2P APIs (`/peer/discover`, `/peer/send`)
+  // E. Outbound Symmetric P2P APIs (`/peer/discover`, `/peer/send`)
   if (pathname === "/peer/discover" && method === "POST") {
     try {
       const raw = await readBody();
@@ -1433,6 +1574,7 @@ export const server = http.createServer(async (req, res) => {
                   mode: "tender",
                   tokenId: payload.tokenId !== undefined ? String(payload.tokenId) : `T-${Date.now().toString().slice(-4)}`,
                   skill: payload.skill || "foga-probe",
+                  ...(payload.waitForExternal ? { waitForExternal: true } : {}),
                   ...(payload.rewardWei !== undefined ? { rewardWei: String(payload.rewardWei) } : {}),
                   ...(payload.valueWei !== undefined ? { valueWei: String(payload.valueWei) } : {}),
                   input: {
@@ -1444,7 +1586,6 @@ export const server = http.createServer(async (req, res) => {
           }
         };
       } else if (action === "tender-missing-input") {
-        // Intentionally omit tokenId to trigger TASK_STATE_INPUT_REQUIRED on remote peer
         rpcParams = {
           message: {
             messageId: `p2p-negotiate-${randomUUID()}`,
@@ -1483,8 +1624,19 @@ export const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // E. Status API (`/api/status`)
+  // F. Status API (`/api/status`)
   if (pathname === "/api/status" && method === "GET") {
+    const pendingInbox = Array.from(tasksStore.values())
+      .filter(t => t.task.status.state === "TASK_STATE_WORKING")
+      .map(t => ({
+        taskId: t.task.id,
+        caller: t.caller,
+        callerAgentId: t.callerAgentId,
+        skill: t.skill,
+        prompt: t.prompt,
+        createdAt: t.createdAt
+      }));
+
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       agentName: nodeName,
@@ -1493,6 +1645,9 @@ export const server = http.createServer(async (req, res) => {
       port: PORT,
       defaultPeerUrl,
       currentLlmEngine,
+      externalAgentMode: isExternalBrainActive(),
+      pendingInboxCount: pendingInbox.length,
+      pendingInbox,
       safetyState,
       policy: {
         minRewardWei: policyConfig.minRewardWei.toString(),
@@ -1516,7 +1671,7 @@ export const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // F. Interactive Web & P2P Peer Console
+  // G. Interactive Web & P2P Peer Console
   if ((pathname === "/" || pathname === "/dashboard") && method === "GET") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderDashboardHtml());
@@ -1569,6 +1724,8 @@ function renderDashboardHtml() {
     .btn-warn:hover { background: #d97706; }
     .btn-success { background: #059669; }
     .btn-success:hover { background: #10b981; }
+    .btn-purple { background: #7c3aed; }
+    .btn-purple:hover { background: #8b5cf6; }
     .input-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
     .input-text { flex: 1; min-width: 200px; background: #070a12; border: 1px solid #28354f; color: #fff; padding: 8px 10px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; }
     .log-container { background: #070a12; border: 1px solid #1a2234; border-radius: 8px; height: 220px; overflow-y: auto; padding: 10px; font-family: monospace; font-size: 0.78rem; }
@@ -1577,6 +1734,7 @@ function renderDashboardHtml() {
     .log-tag-A2A { color: #38bdf8; }
     .log-tag-AUTH { color: #4ade80; }
     .log-tag-GATE { color: #60a5fa; }
+    .log-tag-AGENT { color: #f472b6; }
     .log-tag-STATE { color: #c084fc; }
     .log-tag-WARN { color: #facc15; }
     .full-width { grid-column: 1 / -1; }
@@ -1616,30 +1774,43 @@ function renderDashboardHtml() {
         </div>
       </div>
 
-      <!-- 2. L4 认知适配器 (忒修斯之船) -->
+      <!-- 2. L4 认知适配器 (忒修斯之船 + Antigravity / Codex 接管模式) -->
       <div class="card">
         <div class="card-title">
-          <span>L4 认知推理层 (可热插拔，仅具提议权)</span>
+          <span>L4 认知推理层 (可热插拔 / 真 Agent 接管)</span>
           <span style="color:#c084fc">★ L4 Propose Only</span>
         </div>
         <div class="stat-val" id="currentLlm" style="color:#c084fc;">${currentLlmEngine}</div>
-        <p style="font-size:0.78rem; color:var(--text-muted);">切换认知引擎（L3 内核与以太坊地址 100% 保持不变）：</p>
+        <p style="font-size:0.78rem; color:var(--text-muted);">切换内置规则表或由你的 Antigravity / 导师的 Codex 接管思考：</p>
         <div class="btn-group">
-          <button class="btn btn-secondary" onclick="switchLlm('heuristic-rule-engine')">FOGA Stub 确定性规则表</button>
-          <button class="btn btn-secondary" onclick="switchLlm('claude-3-5-sonnet')">Claude 3.5 适配器</button>
-          <button class="btn btn-secondary" onclick="switchLlm('deepseek-r1')">DeepSeek R1 适配器</button>
+          <button class="btn btn-secondary" onclick="switchLlm('heuristic-rule-engine')">FOGA Stub 规则表</button>
+          <button class="btn btn-purple" onclick="switchLlm('external-antigravity')">🧠 Antigravity 接管</button>
+          <button class="btn btn-purple" onclick="switchLlm('external-codex')">🧠 导师 Codex 接管</button>
+          <button class="btn btn-secondary" onclick="switchLlm('claude-3-5-sonnet')">Claude 3.5</button>
+          <button class="btn btn-secondary" onclick="switchLlm('deepseek-r1')">DeepSeek R1</button>
         </div>
       </div>
 
-      <!-- 3. P2P 对等节点连接器 (主动外呼对方 Agent) -->
+      <!-- 3. External Agent (Antigravity / Codex) 实时收件箱 -->
+      <div class="card full-width" style="border-color: #7c3aed;">
+        <div class="card-title">
+          <span style="color:#c084fc; font-weight:bold;">🧠 External Agent 待办收件箱 (Antigravity / Codex 真实思考与回复通道 — /agent/inbox & /agent/reply)</span>
+          <span style="font-size:0.75rem; color:var(--text-muted);">当处于 external-* 模式时，入站任务过完 L3 门禁后在此等待真 Agent 回复</span>
+        </div>
+        <div id="inboxList" class="code-box" style="margin-bottom:8px; color:#f472b6;">
+          当前无等待真 Agent 回复的挂起任务 (可通过 CLI: node agent_alice_client.js inbox 查看)
+        </div>
+      </div>
+
+      <!-- 4. P2P 对等节点连接器 (主动外呼对方 Agent) -->
       <div class="card full-width" style="border-color: #2563eb;">
         <div class="card-title">
-          <span style="color:#60a5fa; font-weight:bold;">🌐 P2P 对等节点双向连接器 (Outbound Peer Connector — 本节点主动签名外呼对方 Agent)</span>
+          <span style="color:#60a5fa; font-weight:bold;">🌐 P2P 对等节点双向连接器 (Outbound Peer Connector — 本节点主动签名外呼对方隧道 URL)</span>
           <span style="font-size:0.75rem; color:var(--text-muted);">携带 FOGA-EIP712 请求级签名</span>
         </div>
         <div class="input-row">
-          <input id="peerUrlInput" class="input-text" value="${defaultPeerUrl}" placeholder="输入对方 Agent 地址 (例如 http://localhost:3002 或 https://xxxx.loca.lt)" />
-          <input id="peerPromptInput" class="input-text" value="请求对方节点执行跨网链上状态与哈希一致性核验" placeholder="输入发送给对方 Agent 的任务内容" />
+          <input id="peerUrlInput" class="input-text" value="${defaultPeerUrl}" placeholder="输入导师/对方 HTTPS 隧道地址 (例如 https://xxxx.loca.lt)" />
+          <input id="peerPromptInput" class="input-text" value="请求对方 Agent 协作分析 ERC-8004 身份锚点与 L3 状态机边界" placeholder="输入发送给对方 Agent 的任务内容" />
         </div>
         <div class="btn-group">
           <button class="btn btn-success" onclick="discoverPeer()">① 发现对方名片 (AgentCard)</button>
@@ -1652,11 +1823,11 @@ function renderDashboardHtml() {
           <button class="btn btn-secondary" onclick="sendPeerAction('list-tasks')">⑧ 查我方在对方的任务列表 (ListTasks)</button>
         </div>
         <div id="peerResponseBox" class="code-box" style="margin-top:10px; max-height:190px; overflow-y:auto; color:#a7f3d0;">
-          等待发起跨节点 P2P 交互... (提示：本机可同时运行 3001 与 3002 端口互调，或填入导师的 https://xxx.loca.lt 隧道地址)
+          等待发起跨节点 P2P 交互... (提示：与导师异地联调时填入对方的 https://xxx.loca.lt 隧道地址；或直接让你的 Antigravity 与导师的 Codex 通过命令行自动对话！)
         </div>
       </div>
 
-      <!-- 4. 持有技能与 L3 预算/策略门禁状态 -->
+      <!-- 5. 持有技能与 L3 预算/策略门禁状态 -->
       <div class="card">
         <div class="card-title">
           <span>ERC-8338 技能包 (Token-Bound Skills)</span>
@@ -1672,7 +1843,7 @@ function renderDashboardHtml() {
         </div>
       </div>
 
-      <!-- 5. L3 确定性内核决策存证 (Decision Records) -->
+      <!-- 6. L3 确定性内核决策存证 (Decision Records) -->
       <div class="card">
         <div class="card-title">
           <span>L3 内核三关裁决存证 (Catalog Decision Records)</span>
@@ -1683,7 +1854,7 @@ function renderDashboardHtml() {
         </div>
       </div>
 
-      <!-- 6. 实时 A2A 协议与 EIP-712 验签日志 -->
+      <!-- 7. 实时 A2A 协议与 EIP-712 验签日志 -->
       <div class="card full-width">
         <div class="card-title">
           <span>A2A 实时通信、门禁拦截与 EIP-712 验签报文流</span>
@@ -1703,8 +1874,6 @@ function renderDashboardHtml() {
   </div>
 
   <script>
-    let lastNegotiationTaskId = null;
-
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
@@ -1716,6 +1885,19 @@ function renderDashboardHtml() {
         const safetyBadge = document.getElementById('safetyBadge');
         safetyBadge.innerText = 'L3 Safety: ' + data.safetyState;
         safetyBadge.className = data.safetyState === 'ACTIVE' ? 'badge-live' : 'badge-suspended';
+
+        const inboxEl = document.getElementById('inboxList');
+        if (data.pendingInbox && data.pendingInbox.length > 0) {
+          inboxEl.innerHTML = data.pendingInbox.map(item =>
+            '<div style="margin-bottom:6px;">' +
+              '🔔 <b>待回复 TaskID:</b> <code>' + item.taskId + '</code> | 来自: <code>' + item.caller + '</code> (AID: ' + (item.callerAgentId || '?') + ')<br/>' +
+              '💬 <b>对方 Agent 提问:</b> "' + item.prompt + '"<br/>' +
+              '<span style="color:#94a3b8;">👉 可在 Antigravity / Codex 中运行: <code>node agent_alice_client.js reply ' + item.taskId + ' "你的回复内容"</code></span>' +
+            '</div>'
+          ).join('');
+        } else {
+          inboxEl.innerText = '当前无挂起任务 (模式: ' + data.currentLlmEngine + ' | 可通过 CLI: node agent_alice_client.js inbox 查看)';
+        }
 
         const skillsHtml = data.skills.map(s => '<span class="skill-pill">⚡ ' + s.id + '</span>').join('');
         document.getElementById('skillsList').innerHTML = skillsHtml;
@@ -1816,7 +1998,6 @@ function renderDashboardHtml() {
     async function sendPeerNegotiation() {
       const peerUrl = document.getElementById('peerUrlInput').value.trim();
       const prompt = document.getElementById('peerPromptInput').value.trim();
-      // Step 1: Send tender without tokenId -> triggers TASK_STATE_INPUT_REQUIRED
       const res1 = await fetch('/peer/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1831,7 +2012,6 @@ function renderDashboardHtml() {
         return;
       }
 
-      // Step 2: Automatically supply the missing tokenId on the SAME taskId!
       const res2 = await fetch('/peer/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1856,9 +2036,9 @@ function renderDashboardHtml() {
       if (gateType === 'skill') {
         payload.skill = 'non-existent-oracle-skill';
       } else if (gateType === 'policy') {
-        payload.rewardWei = '100'; // Below 100000000000000 wei policy floor
+        payload.rewardWei = '100';
       } else if (gateType === 'budget') {
-        payload.valueWei = '9990000000000000000'; // Exceeds 0.001 ETH per-op cap
+        payload.valueWei = '9990000000000000000';
       }
       const res = await fetch('/peer/send', {
         method: 'POST',
@@ -1885,6 +2065,7 @@ server.listen(PORT, HOST, () => {
   console.log(`• LAN Mobile Access : http://${lanIp}:${PORT}`);
   console.log(`• A2A AgentCard    : http://localhost:${PORT}/.well-known/agent-card.json`);
   console.log(`• A2A Service URL  : http://localhost:${PORT}/a2a`);
+  console.log(`• Agent Inbox URL  : http://localhost:${PORT}/agent/inbox`);
   console.log(`• Default Peer URL : ${defaultPeerUrl}`);
   console.log(`• Cell Account     : ${bobCellAddress}`);
   console.log(`• ERC-8004 AID     : ${bobAgentId}`);

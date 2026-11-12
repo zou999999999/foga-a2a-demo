@@ -16,3 +16,4 @@ start http://localhost:3001
 start http://localhost:3002
 echo ✔ 双节点与双控制台已打开！可在任意节点页面点击按钮向对方发起 P2P 签名调用。
 pause
+
